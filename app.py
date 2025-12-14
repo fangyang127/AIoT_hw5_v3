@@ -57,6 +57,32 @@ def _heuristic_ai_boost(text: str) -> float:
     return 0.6 if any(re.search(p, text_lower) for p in patterns) else 0.0
 
 
+def _structure_ai_boost(text: str) -> float:
+    """
+    若文本包含大量條列/任務規範或明顯 AI 作業關鍵字，增加 AI 機率。
+    這類格式在課作需求與 AI 說明文件中常見。
+    """
+    lower = text.lower()
+    keywords = [
+        "chatgpt",
+        "ai agent",
+        "streamlit",
+        "demo",
+        "github",
+        "repository",
+        "需附上",
+        "必要",
+        "題目",
+        "作業",
+    ]
+    bullet_markers = len(re.findall(r"^\s*[\d-]+\.", text, flags=re.MULTILINE))
+    keyword_hit = any(k in lower for k in keywords)
+    boost = 0.2 if keyword_hit else 0.0
+    if bullet_markers >= 3:
+        boost += 0.1
+    return boost
+
+
 def _gpt2_perplexity(text: str) -> Optional[float]:
     """計算 distilgpt2 困惑度，文本過短時返回 None。"""
     if len(text.split()) < 8:
@@ -143,6 +169,9 @@ def predict(
                     ai_prob += 0.25
                 elif ppl < 30:
                     ai_prob += 0.15
+
+        # 條列/課作型文本適度往 AI 偏移
+        ai_prob += _structure_ai_boost(text)
 
     # 正規化讓 AI% + Human% = 1
     total = ai_prob + human_prob
@@ -273,4 +302,3 @@ st.markdown("---")
 st.caption(
     "隱私提示：所有推論僅在本地端執行，不會上傳或儲存您的文本。輸入過短時，模型信心可能較低。"
 )
-
