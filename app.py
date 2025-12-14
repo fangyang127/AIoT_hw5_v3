@@ -70,16 +70,13 @@ def _structure_ai_boost(text: str) -> float:
         "demo",
         "github",
         "repository",
-        "需附上",
-        "必要",
-        "題目",
-        "作業",
+        "需附上", "必要", "題目", "作業", "要求", "連結", "示範", "hw", "homework",
     ]
     bullet_markers = len(re.findall(r"^\s*[\d-]+\.", text, flags=re.MULTILINE))
     keyword_hit = any(k in lower for k in keywords)
-    boost = 0.2 if keyword_hit else 0.0
+    boost = 0.3 if keyword_hit else 0.0
     if bullet_markers >= 3:
-        boost += 0.1
+        boost += 0.2
     return boost
 
 
@@ -171,7 +168,11 @@ def predict(
                     ai_prob += 0.15
 
         # 條列/課作型文本適度往 AI 偏移
-        ai_prob += _structure_ai_boost(text)
+        structure_boost = _structure_ai_boost(text)
+        ai_prob += structure_boost
+        if structure_boost >= 0.4:
+            ai_prob = max(ai_prob, 0.75)
+            human_prob = min(human_prob, 0.25)
 
     # 正規化讓 AI% + Human% = 1
     total = ai_prob + human_prob
