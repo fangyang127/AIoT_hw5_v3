@@ -35,9 +35,13 @@ def _heuristic_ai_boost(text: str) -> float:
         r"\bi don't have browsing capabilities\b",
         r"\bhere (is|are) (a|some) (concise|brief)\b",
         r"\bprovide (bullet points|a summary)\b",
+        r"\bi cannot provide personal experiences\b",
+        r"\bi am an artificial intelligence\b",
+        r"\bi'm an ai\b",
+        r"\bglad to help\b",
     ]
     text_lower = text.lower()
-    return 0.1 if any(re.search(p, text_lower) for p in patterns) else 0.0
+    return 0.4 if any(re.search(p, text_lower) for p in patterns) else 0.0
 
 
 def predict(text: str) -> Optional[Tuple[float, float, float, Dict[str, float]]]:
@@ -58,8 +62,8 @@ def predict(text: str) -> Optional[Tuple[float, float, float, Dict[str, float]]]
         "Hello-SimpleAI/chatgpt-detector-roberta",  # ChatGPT / Human
     ]
 
-    ai_scores: List[float] = []
-    human_scores: List[float] = []
+    ai_scores: List[Tuple[float, float]] = []  # (ai, weight)
+    human_scores: List[Tuple[float, float]] = []
     breakdown: Dict[str, float] = {}
 
     for name in model_names:
@@ -86,8 +90,19 @@ def predict(text: str) -> Optional[Tuple[float, float, float, Dict[str, float]]]
     if not ai_scores or not human_scores:
         return None
 
-    ai_prob = sum(ai_scores) / len(ai_scores)
-    human_prob = sum(human_scores) / len(human_scores)
+    # 依各模型置信度 (|ai-human|) 加權平均，偏向高置信模型
+    ai_prob = 0.0
+    human_prob = 0.0
+    weight_sum = 0.0
+    for ai, human in zip(ai_scores, human_scores):
+        ai_val = ai if isinstance(ai, float) else ai
+        human_val = human if isinstance(human, float) else human
+        weight = max(abs(ai_val - human_val), 0.1)
+        ai_prob += ai_val * weight
+        human_prob += human_val * weight
+        weight_sum += weight
+    ai_prob = ai_prob / weight_sum
+    human_prob = human_prob / weight_sum
 
     # 針對明顯 LLM 片語做微幅加權
     ai_prob = min(1.0, ai_prob + _heuristic_ai_boost(text))
