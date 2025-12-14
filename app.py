@@ -67,9 +67,9 @@ st.write(
 # 預設樣例
 sample_texts = {
     "AI 範例": (
-        "As an AI language model, I don't possess personal experiences, but I can "
-        "certainly draft a comprehensive overview of the topic with relevant references "
-        "and structured arguments."
+        "Certainly! Here is a concise, well-structured overview of the requested topic. "
+        "As an AI language model, I will provide bullet points, a short summary, and a "
+        "polite closing statement to ensure clarity and coherence."
     ),
     "人類範例": (
         "昨天加班到十一點，回家路上突然下起了大雨，路邊攤的豆漿還是溫的，"
@@ -150,4 +150,3 @@ st.markdown("---")
 st.caption(
     "隱私提示：所有推論僅在本地端執行，不會上傳或儲存您的文本。輸入過短時，模型信心可能較低。"
 )
-
