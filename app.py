@@ -1,21 +1,17 @@
 import io
-from typing import Optional, Tuple
+import re
+from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
 from transformers import pipeline
 
 
+# 支援多個模型並快取，方便 ensemble
 @st.cache_resource(show_spinner=False)
-def load_detector():
-    """
-    Cache the Hugging Face pipeline so the model只載入一次。
-    roberta-base-openai-detector 是輕量級二分類模型，標籤：
-    - Fake: 模型判定為 AI 生成
-    - Real: 模型判定為人類撰寫
-    """
+def load_detector(model_name: str):
     return pipeline(
         "text-classification",
-        model="roberta-base-openai-detector",
+        model=model_name,
         device=-1,  # CPU
     )
 
@@ -28,29 +24,77 @@ def read_uploaded_file(file) -> str:
         return ""
 
 
-def predict(text: str) -> Optional[Tuple[float, float, float]]:
+def _heuristic_ai_boost(text: str) -> float:
     """
-    回傳 (ai_prob, human_prob, max_confidence)
+    若文本包含常見 LLM 自我描述語句，對 AI 機率做微幅加權。
+    這些片語在真實人類文本中少見，可提升偵測準確度。
+    """
+    patterns = [
+        r"\bas an ai language model\b",
+        r"\bi do not have access to real[- ]time data\b",
+        r"\bi don't have browsing capabilities\b",
+        r"\bhere (is|are) (a|some) (concise|brief)\b",
+        r"\bprovide (bullet points|a summary)\b",
+    ]
+    text_lower = text.lower()
+    return 0.1 if any(re.search(p, text_lower) for p in patterns) else 0.0
+
+
+def predict(text: str) -> Optional[Tuple[float, float, float, Dict[str, float]]]:
+    """
+    回傳 (ai_prob, human_prob, max_confidence, breakdown)
     - ai_prob: Fake 標籤分數
     - human_prob: Real 標籤分數
     - max_confidence: 最高分數，用於低信心提示
+    - breakdown: 紀錄各模型輸出，便於除錯
     """
     text = (text or "").strip()
     if not text:
         return None
 
-    detector = load_detector()
-    outputs = detector(
-        text,
-        truncation=True,
-        max_length=512,
-        return_all_scores=True,
-    )[0]
-    score_map = {o["label"]: float(o["score"]) for o in outputs}
-    ai_prob = score_map.get("Fake", 0.0)
-    human_prob = score_map.get("Real", 0.0)
-    max_confidence = max(score_map.values()) if score_map else 0.0
-    return ai_prob, human_prob, max_confidence
+    # 兩個輕量模型做投票：OpenAI detector + ChatGPT detector
+    model_names = [
+        "roberta-base-openai-detector",  # Fake / Real
+        "Hello-SimpleAI/chatgpt-detector-roberta",  # ChatGPT / Human
+    ]
+
+    ai_scores: List[float] = []
+    human_scores: List[float] = []
+    breakdown: Dict[str, float] = {}
+
+    for name in model_names:
+        clf = load_detector(name)
+        outputs = clf(
+            text,
+            truncation=True,
+            max_length=512,
+            return_all_scores=True,
+        )[0]
+        score_map = {o["label"].lower(): float(o["score"]) for o in outputs}
+
+        if "fake" in score_map and "real" in score_map:
+            ai_scores.append(score_map["fake"])
+            human_scores.append(score_map["real"])
+            breakdown[f"{name}_ai"] = score_map["fake"]
+            breakdown[f"{name}_human"] = score_map["real"]
+        elif "chatgpt" in score_map and "human" in score_map:
+            ai_scores.append(score_map["chatgpt"])
+            human_scores.append(score_map["human"])
+            breakdown[f"{name}_ai"] = score_map["chatgpt"]
+            breakdown[f"{name}_human"] = score_map["human"]
+
+    if not ai_scores or not human_scores:
+        return None
+
+    ai_prob = sum(ai_scores) / len(ai_scores)
+    human_prob = sum(human_scores) / len(human_scores)
+
+    # 針對明顯 LLM 片語做微幅加權
+    ai_prob = min(1.0, ai_prob + _heuristic_ai_boost(text))
+    human_prob = max(0.0, 1.0 - ai_prob) if ai_prob + human_prob == 0 else human_prob
+
+    max_confidence = max(ai_prob, human_prob)
+    return ai_prob, human_prob, max_confidence, breakdown
 
 
 st.set_page_config(
@@ -126,7 +170,7 @@ if st.button("開始偵測"):
         if result is None:
             st.error("未取得有效輸入，請重試。")
         else:
-            ai_prob, human_prob, max_conf = result
+            ai_prob, human_prob, max_conf, breakdown = result
             st.subheader("結果")
             st.write(
                 f"AI 生成機率：**{ai_prob * 100:.1f}%** | 人類撰寫機率：**{human_prob * 100:.1f}%**"
@@ -142,6 +186,10 @@ if st.button("開始偵測"):
 
             label = "AI 生成" if ai_prob >= human_prob else "人類撰寫"
             st.info(f"模型判斷：**{label}**")
+
+            with st.expander("模型細節", expanded=False):
+                for k, v in breakdown.items():
+                    st.write(f"{k}: {v:.3f}")
 
             if max_conf < 0.6:
                 st.warning("模型信心偏低，結果僅供參考。")
